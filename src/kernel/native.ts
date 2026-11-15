@@ -1,6 +1,10 @@
 import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 
+export function isDesktop() {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
 export function native<T = Record<string, unknown>>(method: string, payload?: unknown) {
   return invoke<T>('native_call', { method, payload: payload ?? null })
 }

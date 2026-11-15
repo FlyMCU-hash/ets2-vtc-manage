@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { defineAsyncComponent, onMounted, ref } from 'vue'
+import { fallbackDisableDlcs, loadDisableDlcs, type DisableDlc } from '@/kernel/dlc'
 import { publicGet, request } from '@/kernel/http'
 import { fail, ok } from '@/kernel/toast'
 import { OFFICIAL_SERVERS, itemsOf, statusLabel, textOf } from '@/kernel/types'
@@ -30,34 +31,9 @@ type Activity = {
   content: string
   checkinConfigs: Checkin[]
 }
-type DlcOption = { id: number; name: string; kind: '地图' | '挂车' | '客运' }
-const DISABLE_DLCS: DlcOption[] = [
-  { id: 2604420, name: '希腊', kind: '地图' },
-  { id: 2004210, name: '西巴尔干', kind: '地图' },
-  { id: 1209460, name: '伊比利亚', kind: '地图' },
-  { id: 1056760, name: '通往黑海之路', kind: '地图' },
-  { id: 925580, name: '波罗的海彼岸', kind: '地图' },
-  { id: 558244, name: '意大利', kind: '地图' },
-  { id: 531130, name: '法兰西万岁！', kind: '地图' },
-  { id: 304212, name: '斯堪的纳维亚', kind: '地图' },
-  { id: 227310, name: '向东前进！', kind: '地图' },
-  { id: 910001, name: '极地', kind: '地图' },
-  { id: 3796990, name: '冰岛', kind: '地图' },
-  { id: 3809270, name: '客运', kind: '客运' },
-  { id: 388477, name: 'Schwarzmüller 挂车包', kind: '挂车' },
-  { id: 2193220, name: 'Feldbinder 挂车包', kind: '挂车' },
-  { id: 2455690, name: 'Wielton 挂车包', kind: '挂车' },
-  { id: 2569750, name: 'TIRSAN 挂车包', kind: '挂车' },
-  { id: 2833100, name: 'Schmitz Cargobull 挂车包', kind: '挂车' },
-  { id: 3034940, name: 'Kögel 挂车包', kind: '挂车' },
-  { id: 3034950, name: 'Kässbohrer 挂车包', kind: '挂车' },
-  { id: 933610, name: 'Krone 挂车包', kind: '挂车' },
-  { id: 910002, name: 'Krone 农业挂车', kind: '挂车' },
-]
-
 const items = ref<Activity[]>([])
 const servers = ref<{ name: string; label: string }[]>([])
-const dlcs = ref<DlcOption[]>(DISABLE_DLCS)
+const dlcs = ref<DisableDlc[]>(fallbackDisableDlcs())
 const mapConfig = ref<Record<string, unknown> | null>(null)
 const editing = ref<Activity | null>(null)
 const creating = ref(false)
@@ -87,7 +63,12 @@ function blank() {
 let serversTask: Promise<void> | null = null
 let mapTask: Promise<void> | null = null
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadDisableDlcs().then((list) => {
+    dlcs.value = list
+  })
+})
 
 function ensureEditorData() {
   serversTask ??= loadServerOptions().catch(() => {
@@ -182,12 +163,13 @@ function openEdit(item: Activity) {
     status: `${item.status || 'upcoming'}`,
     dlcIds: dlcIdList(item.dlcIds),
     content: `${item.content || ''}`,
-    checkinConfigs: configs.map((raw, index) => normalizeConfig(raw as Record<string, unknown>, index)),
+    checkinConfigs: assignConfigIds(configs.map((raw, index) => normalizeConfig(raw as Record<string, unknown>, index))),
   }
   creating.value = true
   editorTab.value = 'basic'
   editing.value = item
-  editConfig(undefined, 'fixed')
+  if (form.value.checkinConfigs.length) editConfig(form.value.checkinConfigs[0])
+  else editConfig(undefined, 'fixed')
   archiveNote.value = ''
   archiveNoteKind.value = ''
   ensureEditorData()
@@ -200,12 +182,44 @@ function normalizeConfig(raw: Record<string, unknown>, index: number): Checkin {
     points: Number(raw.points || 0),
     serverName: `${raw.serverName || ''}`,
     type: raw.type === 'range' ? 'range' : 'fixed',
-    checkinTime: toPicker(`${raw.checkinTime || ''}`),
-    startTime: toPicker(`${raw.startTime || ''}`),
-    endTime: toPicker(`${raw.endTime || ''}`),
+    checkinTime: clockOf(`${raw.checkinTime || ''}`),
+    startTime: clockOf(`${raw.startTime || ''}`),
+    endTime: clockOf(`${raw.endTime || ''}`),
     polygon: Array.isArray(raw.polygon) ? (raw.polygon as Point[]) : [],
   }
 }
+function sameServerName(actual: string, wanted: string) {
+  const norm = (value: string) => value.toLowerCase().replace(/\s+/g, '').replace(/^(ets2|ats|promods)[·•.-]+/i, '').replace(/^\[[a-z0-9]+\]/, '')
+  const left = norm(actual)
+  const right = norm(wanted)
+  return left === right || left.endsWith(right) || right.endsWith(left)
+}
+
+function clockOf(value: string) {
+  const match = value.match(/(\d{2}:\d{2})/)
+  return match ? match[1] : ''
+}
+
+function nextConfigId() {
+  const used = form.value.checkinConfigs
+    .map((item) => Number(item.id))
+    .filter((id) => Number.isFinite(id) && id > 0 && id <= 2147483647)
+  return (used.length ? Math.max(...used) : 0) + 1
+}
+
+function assignConfigIds(list: Checkin[]) {
+  const used = new Set<number>()
+  return list.map((item) => {
+    let id = Number(item.id)
+    if (!Number.isFinite(id) || id <= 0 || id > 2147483647 || used.has(id)) {
+      id = 1
+      while (used.has(id)) id += 1
+    }
+    used.add(id)
+    return { ...item, id }
+  })
+}
+
 function checkinMode(item: Checkin): CheckinMode {
   if (item.type === 'fixed') return 'fixed'
   const start = item.startTime.slice(-5)
@@ -222,7 +236,7 @@ function editConfig(item?: Checkin, preset?: CheckinMode) {
     return
   }
   cfg.value = {
-    id: Date.now(),
+    id: nextConfigId(),
     name: '',
     points: 10,
     serverName: form.value.location,
@@ -233,6 +247,41 @@ function editConfig(item?: Checkin, preset?: CheckinMode) {
     polygon: [],
   }
 }
+function configSummary(item: Checkin) {
+  const mode = checkinMode(item)
+  const when = mode === 'fixed'
+    ? item.checkinTime.slice(-5) || '未设时间'
+    : mode === 'all'
+      ? '全天'
+      : `${item.startTime.slice(-5) || '?'}–${item.endTime.slice(-5) || '?'}`
+  const area = item.polygon.length >= 3 ? `${item.polygon.length} 点` : '未画区域'
+  return `${when} · ${item.points || 0} 积分 · ${area}`
+}
+
+function editingSavedConfig() {
+  return form.value.checkinConfigs.some((item) => item.id === cfg.value?.id)
+}
+
+function openSavedConfig(item: Checkin) {
+  if (cfg.value?.id === item.id) return
+  if (!commitDraft()) return
+  const saved = form.value.checkinConfigs.find((row) => row.id === item.id) || item
+  editConfig(saved)
+}
+
+function startNewConfig() {
+  if (!commitDraft()) return
+  editConfig(undefined, 'fixed')
+}
+
+function removeConfig(item: Checkin) {
+  form.value.checkinConfigs = form.value.checkinConfigs.filter((row) => row.id !== item.id)
+  if (cfg.value?.id !== item.id) return
+  const next = form.value.checkinConfigs[0]
+  if (next) editConfig(next)
+  else editConfig(undefined, 'fixed')
+}
+
 function commitDraft() {
   if (!cfg.value) return true
   const draft = cfg.value
@@ -273,7 +322,10 @@ async function locatePlayer() {
     const lng = Number(item.lng)
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error('未获取到坐标')
     mapRef.value?.focus(lat, lng)
-    ok(`已定位 ${item.name || id}`)
+    const where = `${item.serverName || ''}`.replace(/\(#\d+\)$/, '').trim()
+    const wanted = serverName.trim()
+    const same = !where || !wanted || sameServerName(where, wanted)
+    ok(same ? `已定位 ${item.name || id}${where ? `，当前在「${where}」` : ''}` : `已定位 ${item.name || id}，当前在「${where}」，打卡配置要求「${wanted}」`)
   } catch (error) {
     fail(error)
   } finally {
@@ -506,8 +558,9 @@ async function removeFile(file: Record<string, unknown>) {
       </div>
       <div v-show="editorTab === 'dlc'">
         <h2>依赖 DLC</h2>
-        <p class="muted">勾选的 DLC 在部署存档时会保留。一个都不选，就禁用全部 21 个。</p>
-        <template v-for="kind in ['地图', '客运', '挂车']" :key="kind">
+        <p class="muted">勾选的 DLC 在部署存档时会保留。一个都不选，就禁用全部 {{ dlcs.length }} 个。</p>
+        <template v-for="kind in ['地图', '客运', '挂车', '货物']" :key="kind">
+          <template v-if="dlcs.some((item) => item.kind === kind)">
           <h3 class="area-title">{{ kind }}</h3>
           <div class="dlc-grid">
             <button
@@ -519,11 +572,22 @@ async function removeFile(file: Record<string, unknown>) {
               @click="toggleDlc(dlc.id)"
             >{{ dlc.name }}</button>
           </div>
+          </template>
         </template>
         <div class="row editor-save" style="margin-top: 16px"><button class="btn" @click="save">保存活动</button></div>
       </div>
       <div v-if="editorTab === 'checkin' && cfg" class="editor-checkin">
-        <h2>新增打卡配置</h2>
+        <div v-if="form.checkinConfigs.length" class="checkin-list">
+          <div v-for="item in form.checkinConfigs" :key="item.id" class="checkin-item" :class="{ on: cfg.id === item.id }">
+            <button type="button" class="checkin-open" @click="openSavedConfig(item)">
+              <strong>{{ item.name || '未命名打卡' }}</strong>
+              <span class="muted">{{ configSummary(item) }}</span>
+            </button>
+            <button type="button" class="btn-danger" @click="removeConfig(item)">删除</button>
+          </div>
+        </div>
+        <button type="button" class="btn-ghost checkin-add" @click="startNewConfig">新增打卡配置</button>
+        <h2>{{ editingSavedConfig() ? '编辑打卡配置' : '新增打卡配置' }}</h2>
         <div class="checkin-grid">
           <label class="field"><span>配置名称</span><input v-model="cfg.name" placeholder="配置名称" /></label>
           <label class="field points"><span>积分</span><input v-model.number="cfg.points" /></label>

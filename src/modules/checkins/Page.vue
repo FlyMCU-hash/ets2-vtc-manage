@@ -45,7 +45,11 @@ async function create() {
 async function scan() {
   try {
     const data = await request<Record<string, unknown>>('/api/checkins/scan', { admin: true, method: 'POST', body: {} })
-    ok(`${data.message || '扫描完成'}（新增 ${data.created ?? 0} 条）`)
+    const hints = Array.isArray(data.hints) ? data.hints.map((item) => `${item}`.trim()).filter(Boolean) : []
+    const detail = hints.filter((line) => /在线于|未匹配到服务器|不在框内|不在打卡区域|写入失败/.test(line))
+    const created = Number(data.checked ?? data.created ?? 0) || 0
+    const head = `${data.message || '扫描完成'}（新增 ${created} 条）`
+    ok(detail.length ? `${head}\n${detail.join('\n')}` : head)
     await load()
   } catch (error) {
     fail(error)

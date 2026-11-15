@@ -1,18 +1,19 @@
 {
   "name": "peak-center",
   "private": true,
-  "version": "4.0.2",
+  "version": "4.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "build:web": "vue-tsc --noEmit && vite build --outDir server/dist --emptyOutDir",
     "tauri": "tauri",
-    "pack": "node scripts/pack.mjs",
-    "server": "cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --features server --bin peak-server"
+    "pack": "node scripts/pack.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",
     "@tauri-apps/plugin-opener": "^2.5.0",
+    "@tauri-apps/plugin-updater": "^2.14.1",
     "leaflet": "^1.9.4",
     "pinia": "^3.0.3",
     "vue": "^3.5.22"

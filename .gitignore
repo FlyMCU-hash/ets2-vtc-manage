@@ -5,3 +5,7 @@ src-tauri/gen
 .env
 *.log
 发布
+src-tauri/updater.key
+src-tauri/updater.password
+server/updates/*.nsis.zip
+server/updates/*-setup.exe

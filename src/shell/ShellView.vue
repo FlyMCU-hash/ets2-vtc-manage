@@ -4,7 +4,10 @@ import { request } from '@/kernel/http'
 import { groupOrder, modules } from '@/kernel/modules'
 import { canAccess, isManager } from '@/kernel/perms'
 import { useSession } from '@/kernel/session'
+import { fail, ok } from '@/kernel/toast'
 import { itemsOf } from '@/kernel/types'
+import { isDesktop } from '@/kernel/native'
+import { checkAppUpdate } from '@/kernel/update'
 import logoUrl from '../../logo.ico'
 import Icon from './Icon.vue'
 
@@ -14,12 +17,13 @@ const pageCache = ref<Record<string, ReturnType<typeof defineAsyncComponent>>>({
 const visible = computed(() =>
   modules.filter((mod) => {
     if (mod.overlay) return false
+    if (mod.local && !isDesktop()) return false
     if (mod.managerOnly && !isManager(session.user)) return false
     return !mod.permission || canAccess(session.user, mod.permission)
   }),
 )
 
-const overlays = computed(() => modules.filter((mod) => mod.overlay))
+const overlays = computed(() => modules.filter((mod) => mod.overlay && isDesktop()))
 
 function overlayView(mod: (typeof modules)[number]) {
   pageCache.value[mod.id] ||= defineAsyncComponent(mod.load as never)
@@ -71,6 +75,32 @@ onMounted(async () => {
   }
 })
 
+const checkingUpdate = ref(false)
+const updateLabel = ref('检查更新')
+
+async function checkUpdate() {
+  if (checkingUpdate.value) return
+  checkingUpdate.value = true
+  updateLabel.value = '检查中…'
+  try {
+    const updating = await checkAppUpdate((text) => {
+      updateLabel.value = text
+    }, true)
+    if (updating) {
+      updateLabel.value = '安装完成'
+      ok('更新已安装，请重新打开软件')
+      return
+    }
+    updateLabel.value = '检查更新'
+    ok('已是最新版本')
+  } catch (error) {
+    updateLabel.value = '检查更新'
+    fail(error)
+  } finally {
+    checkingUpdate.value = false
+  }
+}
+
 const current = computed(() => visible.value.find((mod) => mod.id === session.tab) || visible.value[0])
 const view = computed(() => {
   const mod = current.value
@@ -119,6 +149,7 @@ const view = computed(() => {
       <header class="topbar">
         <button class="btn-ghost" @click="session.toggleNav()">{{ session.collapsed ? '展开' : '收起' }}</button>
         <div class="row">
+          <button v-if="isDesktop()" class="btn-ghost" :disabled="checkingUpdate" @click="checkUpdate">{{ updateLabel }}</button>
           <button class="btn-ghost" @click="session.setTheme(session.settings.theme === 'dark' ? 'light' : 'dark')">
             {{ session.settings.theme === 'dark' ? '白天' : '黑夜' }}
           </button>

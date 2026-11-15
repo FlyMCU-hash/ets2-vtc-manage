@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
-import { native } from '@/kernel/native'
+import { isDesktop, native } from '@/kernel/native'
 import { storage } from '@/kernel/storage'
 import { useSession } from '@/kernel/session'
 import { fail, ok } from '@/kernel/toast'
@@ -132,15 +132,17 @@ async function shrinkImage(picked: File) {
       <h1>平台设置</h1>
     </div>
     <div class="row">
-      <button class="btn-ghost" :disabled="busy" @click="detect">自动检测</button>
+      <button v-if="isDesktop()" class="btn-ghost" :disabled="busy" @click="detect">自动检测</button>
       <button class="btn" @click="save">保存</button>
     </div>
   </header>
   <div class="card" style="max-width: 720px">
     <label class="field"><span>车队中心地址</span><input v-model="form.apiBase" placeholder="http://df.peakvtc.cn" /></label>
-    <label class="field"><span>欧卡 2 安装目录</span><input v-model="form.ets2InstallPath" /></label>
-    <label class="field"><span>存档文档目录</span><input v-model="form.ets2DocumentsPath" placeholder="Documents\Euro Truck Simulator 2" /></label>
-    <label class="row"><input v-model="form.disableMapDlcOnDeploy" type="checkbox" /> 部署活动时禁用地图 DLC</label>
+    <template v-if="isDesktop()">
+      <label class="field"><span>欧卡 2 安装目录</span><input v-model="form.ets2InstallPath" /></label>
+      <label class="field"><span>存档文档目录</span><input v-model="form.ets2DocumentsPath" placeholder="Documents\Euro Truck Simulator 2" /></label>
+      <label class="row"><input v-model="form.disableMapDlcOnDeploy" type="checkbox" /> 部署活动时禁用地图 DLC</label>
+    </template>
     <div class="field">
       <span>背景颜色</span>
       <div class="bg-colors">

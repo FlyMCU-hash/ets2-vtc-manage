@@ -25,9 +25,6 @@ export function bindUnauthorized(handler: () => void) {
 
 export async function request<T = Record<string, unknown>>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = (options.method || 'GET').toUpperCase()
-  if (path.startsWith('/api/servers') || path.startsWith('/api/tmp-player/')) {
-    throw new ApiError('这项数据由外部接口提供')
-  }
   return remoteRequest<T>(method, path, options)
 }
 

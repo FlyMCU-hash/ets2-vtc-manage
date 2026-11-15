@@ -11,7 +11,7 @@ const DLC_SUFFIX: &str = ".bak";
 const DLC_LEGACY: &str = ".peak_disabled";
 /// 部署时把本机 3C 盖到活动档：按键、画面、本地覆盖。
 const LOCAL_3C: &[&str] = &["controls.sii", "config.cfg", "config_local.cfg"];
-/// 地图 11 个 + 客运 1 个 + 挂车 9 个。活动勾选了对应编号时，部署跳过该文件。
+/// 服务器目录缺失时的内置名单。地图 11 个 + 客运 1 个 + 挂车 9 个。活动勾选了对应编号时，部署跳过该文件。
 const FLEET_DISABLE_SCS: &[(&str, i64)] = &[
     ("dlc_greece.scs", 2604420),
     ("dlc_balkan_w.scs", 2004210),
@@ -193,9 +193,10 @@ pub fn deploy(payload: &Value) -> Result<Value, String> {
             notices.push("未找到欧卡安装目录，地图、客运和挂车 DLC 未禁用。请先到平台设置填写安装路径。".to_string());
         } else {
             enable_all_disabled(root);
+            let catalog = disable_catalog(payload);
             let keep_ids = keep_dlc_ids(payload);
-            let names = find_scs_to_disable(root, &keep_ids);
-            let kept = FLEET_DISABLE_SCS.iter().filter(|(_, id)| keep_ids.contains(id)).count();
+            let names = find_scs_to_disable(root, &keep_ids, &catalog);
+            let kept = catalog.iter().filter(|(_, id)| keep_ids.contains(id)).count();
             held = disable_selected(root, &names);
             if names.is_empty() && kept > 0 {
                 notices.push(format!("已按活动依赖保留 {kept} 个 DLC，没有额外禁用。"));
@@ -466,6 +467,29 @@ fn enable_all_disabled(install_root: &Path) {
     }
 }
 
+fn disable_catalog(payload: &Value) -> Vec<(String, i64)> {
+    let parsed = payload
+        .get("disableDlcs")
+        .and_then(|value| value.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|item| {
+                    let file = item.get("file").and_then(|value| value.as_str()).unwrap_or("").trim().to_string();
+                    let id = item
+                        .get("id")
+                        .and_then(|value| value.as_i64().or_else(|| value.as_u64().and_then(|n| i64::try_from(n).ok())))
+                        .unwrap_or(0);
+                    if file.is_empty() || id <= 0 { None } else { Some((file, id)) }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !parsed.is_empty() {
+        return parsed;
+    }
+    FLEET_DISABLE_SCS.iter().map(|(file, id)| (file.to_string(), *id)).collect()
+}
+
 fn keep_dlc_ids(payload: &Value) -> HashSet<i64> {
     payload
         .get("keepDlcIds")
@@ -479,8 +503,8 @@ fn keep_dlc_ids(payload: &Value) -> HashSet<i64> {
         .unwrap_or_default()
 }
 
-fn find_scs_to_disable(install_root: &Path, keep_ids: &HashSet<i64>) -> Vec<String> {
-    let disable_set: HashSet<String> = FLEET_DISABLE_SCS
+fn find_scs_to_disable(install_root: &Path, keep_ids: &HashSet<i64>, catalog: &[(String, i64)]) -> Vec<String> {
+    let disable_set: HashSet<String> = catalog
         .iter()
         .filter(|(_, id)| !keep_ids.contains(id))
         .map(|(file, _)| file.to_ascii_lowercase())

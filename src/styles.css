@@ -78,6 +78,10 @@ h1, h2, p { margin: 0; }
   box-shadow: var(--shadow);
 }
 .login-card { width: 100%; min-height: 100%; padding: 28px 24px 22px; color: var(--ink); background: #f7fbfb; border: 0; border-radius: 0; box-shadow: none; display: flex; flex-direction: column; }
+@media (min-width: 520px) {
+  .login { place-items: center; padding: 32px 16px; background: #e7eeec; }
+  .login-card { width: min(400px, 100%); min-height: 0; border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+}
 .login-card.leaving > :not(.login-submit) { opacity: 0; transform: translateY(-8px); pointer-events: none; }
 .login-logo { width: 72px; height: 72px; margin: 0 auto 14px; display: block; border-radius: 18px; object-fit: cover; }
 .login-card h1 { font-size: 26px; letter-spacing: 0.02em; }
@@ -381,6 +385,11 @@ th { color: var(--muted); font-weight: 600; background: color-mix(in srgb, var(-
 .map-tools .btn-ghost { height: 34px; padding: 0 12px; }
 .map-count { margin-left: auto; }
 .map-hint { margin: 8px 0; }
+.checkin-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.checkin-item { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; background: var(--panel); }
+.checkin-item.on { border-color: var(--accent); }
+.checkin-open { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; border: 0; background: transparent; text-align: left; padding: 0; }
+.checkin-add { margin-bottom: 14px; }
 .checkin-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .map { height: 360px; border-radius: 12px; border: 1px solid var(--line); background: #1a2332; overflow: hidden; }
 .map.leaflet-container { background: #1a2332; }
@@ -389,7 +398,7 @@ th { color: var(--muted); font-weight: 600; background: color-mix(in srgb, var(-
 .map-index::before { display: none; }
 .leaflet-control-zoom a { width: 28px; height: 28px; line-height: 26px; }
 .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 30; }
-.toast { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; max-width: 320px; }
+.toast { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; max-width: 420px; white-space: pre-line; }
 .toast.err { border-color: var(--danger); }
 .checks { display: flex; gap: 12px; flex-wrap: wrap; }
 .dlc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 10px; margin-bottom: 14px; }

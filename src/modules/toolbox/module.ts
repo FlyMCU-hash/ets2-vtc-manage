@@ -6,6 +6,7 @@ const mod: PeakModule = {
   group: '接档器',
   order: 45,
   icon: 'toolbox',
+  local: true,
   load: () => import('./Page.vue'),
 }
 export default mod

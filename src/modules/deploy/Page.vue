@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { loadDisableDlcs } from '@/kernel/dlc'
 import { request } from '@/kernel/http'
 import { native } from '@/kernel/native'
 import { useSession } from '@/kernel/session'
@@ -102,6 +103,7 @@ async function deploy() {
         disableMapDlcOnDeploy: settings.disableMapDlcOnDeploy,
       },
       keepDlcIds: dlcIdsOf(activity),
+      disableDlcs: (await loadDisableDlcs()).flatMap((item) => item.files.map((file) => ({ file, id: item.id }))),
     })
     showNotice('ok', '存档已部署')
     status.value = await native('deploy_status')

@@ -3,8 +3,17 @@
   "identifier": "default",
   "description": "Peak 车队中心主窗口",
   "windows": ["main"],
+  "remote": {
+    "urls": [
+      "http://df.peakvtc.cn",
+      "http://df.peakvtc.cn/*",
+      "https://df.peakvtc.cn",
+      "https://df.peakvtc.cn/*"
+    ]
+  },
   "permissions": [
     "core:default",
-    "opener:default"
+    "opener:default",
+    "updater:default"
   ]
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { publicGet, request } from '@/kernel/http'
-import { native } from '@/kernel/native'
+import { isDesktop, native } from '@/kernel/native'
 import { storage } from '@/kernel/storage'
 import { fail, ok } from '@/kernel/toast'
 
@@ -57,6 +57,7 @@ async function findPlayer(id: string) {
   } catch {
     /* 改走本机查询 */
   }
+  if (!isDesktop()) return null
   const data = await native<Record<string, unknown>>('tmp_lookup', { tmpId: id })
   const player = data.player
   return player && typeof player === 'object' ? player as Record<string, unknown> : null

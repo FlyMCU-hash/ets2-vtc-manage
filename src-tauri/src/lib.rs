@@ -1,5 +1,3 @@
-#[cfg(feature = "server")]
-mod db;
 #[cfg(feature = "desktop")]
 mod native;
 #[cfg(feature = "desktop")]
@@ -12,16 +10,12 @@ use shell::{set_window_mode, setup_shell};
 #[cfg(feature = "desktop")]
 use tauri::Manager;
 
-#[cfg(feature = "server")]
-pub fn serve() {
-    db::serve();
-}
-
 #[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             setup_shell(app)?;
             native::chat::install();

@@ -20,7 +20,7 @@ export function notify(text: unknown, kind: 'ok' | 'err' = 'ok') {
   window.setTimeout(() => {
     const index = state.items.findIndex((item) => item.id === id)
     if (index >= 0) state.items.splice(index, 1)
-  }, 3600)
+  }, message.length > 40 ? 9000 : 3600)
 }
 
 export function ok(text: unknown) {

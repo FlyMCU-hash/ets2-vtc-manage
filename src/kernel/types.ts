@@ -1,4 +1,4 @@
-export const APP_VERSION = 'V4.0.2'
+export const APP_VERSION = 'V4.1.1'
 export const DEFAULT_API = 'http://df.peakvtc.cn'
 export const DEFAULT_SERVERS = 'http://110.42.60.187:9100/server/list'
 export const OFFICIAL_SERVERS = 'https://api.truckersmp.com/v2/servers'
@@ -54,12 +54,19 @@ export interface PeakModule {
   permission?: PermKey
   managerOnly?: boolean
   overlay?: boolean
+  /** 依赖本机欧卡或本机文件，网页端不显示。 */
+  local?: boolean
   load: () => Promise<{ default: object }>
+}
+
+export function defaultApiBase() {
+  if (typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window)) return window.location.origin
+  return DEFAULT_API
 }
 
 export function defaultSettings(): AppSettings {
   return {
-    apiBase: DEFAULT_API,
+    apiBase: defaultApiBase(),
     serversUrl: DEFAULT_SERVERS,
     theme: 'light',
     ets2InstallPath: '',
@@ -86,7 +93,7 @@ export function sanitizeUrl(raw: unknown, fallback: string) {
 export function readSettings(raw: unknown): AppSettings {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
   return {
-    apiBase: sanitizeUrl(data.apiBase, DEFAULT_API),
+    apiBase: sanitizeUrl(data.apiBase, defaultApiBase()),
     serversUrl: sanitizeUrl(data.serversUrl, DEFAULT_SERVERS),
     theme: data.theme === 'dark' ? 'dark' : 'light',
     ets2InstallPath: cleanText(data.ets2InstallPath),
