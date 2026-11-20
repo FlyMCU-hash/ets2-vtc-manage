@@ -119,6 +119,26 @@ function noStore(res) {
   return res;
 }
 
+// 桌面壳加载的就是这个页面。CSP 写在响应头上，tauri.conf.json 里的同名策略才会在远程页面生效。
+const PAGE_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https://q1.qlogo.cn https://ets2.online",
+  "font-src 'self' data:",
+  "connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost http://df.peakvtc.cn https://df.peakvtc.cn http://110.42.60.187:9100 https://api.truckersmp.com",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+function pageHeaders(res) {
+  noStore(res);
+  res.set("Content-Security-Policy", PAGE_CSP);
+  return res;
+}
+
 function redirectNoStore(res, url) {
   return noStore(res).redirect(url);
 }
@@ -130,9 +150,8 @@ function sendHtml(res, filename) {
 // GET /api/me 等若被浏览器/Nginx 缓存，登录页会当成「已登录」跳走，和后台 401 来回刷新
 app.use((req, res, next) => {
   const p = String(req.path || "");
-  if (p.startsWith("/api/") || p === "/" || p.endsWith(".html")) {
-    noStore(res);
-  }
+  if (p.startsWith("/api/")) noStore(res);
+  else if (p === "/" || p === "/login" || p.endsWith(".html")) pageHeaders(res);
   next();
 });
 
@@ -1330,25 +1349,59 @@ let serversCache = { at: 0, items: [] };
 let serversRefreshing = null;
 const SERVERS_FRESH_MS = 5 * 60 * 1000;
 
+function mapServerRow(raw) {
+  const name = String(raw.serverName || raw.name || raw.shortName || raw.shortname || "").trim();
+  if (!name) return null;
+  return {
+    id: raw.serverId ?? raw.id,
+    name,
+    shortName: raw.shortName || raw.shortname || "",
+    shortname: raw.shortName || raw.shortname || "",
+    game: raw.game || "",
+    online: Boolean(raw.isOnline ?? raw.online),
+    players: Number(raw.playerCount ?? raw.players) || 0,
+    maxplayers: Number(raw.maxPlayer ?? raw.maxplayers) || 0,
+    queue: Number(raw.queueCount ?? raw.queue) || 0,
+    speedLimiter: raw.speedLimiter ?? raw.speedlimiter,
+    collisions: raw.collisions,
+    carsForPlayers: raw.carsForPlayers ?? raw.carsforplayers,
+    afkEnabled: raw.afkEnabled ?? raw.afkenabled,
+    promods: raw.promods,
+    event: raw.event,
+  };
+}
+
+function rowsOfServerPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  const direct = payload.data || payload.response || payload.items;
+  if (Array.isArray(direct)) return direct;
+  if (direct && typeof direct === "object") {
+    const nested = direct.list || direct.items || direct.servers;
+    if (Array.isArray(nested)) return nested;
+  }
+  return [];
+}
+
 async function fetchServersFromEvm() {
-  const { payload } = await evmApi.fetchJson("/server/list", null, 8000);
-  const list = Array.isArray(payload.data) ? payload.data : [];
+  const { payload } = await evmApi.fetchJson("/server/list", null, 4000);
+  const list = rowsOfServerPayload(payload);
   if (!list.length) throw new Error("EVM 服务器列表为空");
-  return list
-    .map((s) => {
-      const name = String(s.serverName || s.name || s.shortName || "").trim();
-      if (!name) return null;
-      return {
-        id: s.serverId ?? s.id,
-        name,
-        shortname: s.shortName || s.shortname || "",
-        game: s.game || "",
-        online: Boolean(s.isOnline ?? s.online),
-        players: Number(s.playerCount ?? s.players) || 0,
-        maxplayers: Number(s.maxPlayer ?? s.maxplayers) || 0,
-      };
-    })
-    .filter(Boolean);
+  return list.map(mapServerRow).filter(Boolean);
+}
+
+async function fetchServersFromMirror() {
+  const upstream = await evmApi.httpFetch("http://110.42.60.187:9100/server/list", {
+    signal: evmApi.makeSignal(4000),
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "PeakFleet/1.0",
+    },
+  });
+  const payload = await upstream.json();
+  const list = rowsOfServerPayload(payload);
+  if (!list.length) throw new Error("镜像服务器列表为空");
+  return list.map(mapServerRow).filter(Boolean);
 }
 
 async function fetchServersFromTruckersMp() {
@@ -1368,32 +1421,21 @@ async function fetchServersFromTruckersMp() {
   if (failed && !list.length) {
     throw new Error("TruckersMP 服务器接口返回错误");
   }
-  return list
-    .map((s) => {
-      const name = String(s.name || s.shortname || "").trim();
-      if (!name) return null;
-      return {
-        id: s.id,
-        name,
-        shortname: s.shortname || "",
-        game: s.game || "",
-        online: Boolean(s.online),
-        players: Number(s.players) || 0,
-        maxplayers: Number(s.maxplayers) || 0,
-      };
-    })
-    .filter(Boolean);
+  return list.map(mapServerRow).filter(Boolean);
 }
 
 async function fetchServersFromUpstream() {
-  try {
-    const items = await fetchServersFromEvm();
-    serversCache = { at: Date.now(), items };
-    return items;
-  } catch (err) {
-    console.warn("EVM 服务器列表失败，回退 TruckersMP:", err.message);
-  }
-  const items = await fetchServersFromTruckersMp();
+  const loads = [fetchServersFromEvm, fetchServersFromMirror, fetchServersFromTruckersMp];
+  const lists = await Promise.all(
+    loads.map((load) =>
+      load().catch((err) => {
+        console.warn("服务器列表来源失败:", err.message);
+        return [];
+      })
+    )
+  );
+  const items = lists.reduce((best, list) => (list.length > best.length ? list : best), []);
+  if (!items.length) throw new Error("获取服务器列表失败");
   serversCache = { at: Date.now(), items };
   return items;
 }
@@ -1411,26 +1453,20 @@ function refreshServersInBackground() {
   return serversRefreshing;
 }
 
-app.get("/api/servers", requireAuth, async (req, res) => {
+async function loadServerItems() {
   const now = Date.now();
-  const fresh =
-    serversCache.items.length && now - serversCache.at < SERVERS_FRESH_MS;
-  if (fresh) {
-    return res.json({ ok: true, items: serversCache.items, cached: true });
-  }
-  // 有旧缓存：立刻返回，后台刷新，避免打开活动弹窗卡住
+  const fresh = serversCache.items.length && now - serversCache.at < SERVERS_FRESH_MS;
+  if (fresh) return { items: serversCache.items, cached: true };
   if (serversCache.items.length) {
     refreshServersInBackground();
-    return res.json({
-      ok: true,
-      items: serversCache.items,
-      cached: true,
-      stale: true,
-    });
+    return { items: serversCache.items, cached: true, stale: true };
   }
+  return { items: await fetchServersFromUpstream(), cached: false };
+}
+
+app.get("/api/servers", requireAuth, async (req, res) => {
   try {
-    const items = await fetchServersFromUpstream();
-    res.json({ ok: true, items, cached: false });
+    res.json({ ok: true, ...(await loadServerItems()) });
   } catch (err) {
     console.error("servers list error:", err.message);
     res.status(502).json({ ok: false, message: "获取服务器列表失败" });
@@ -1595,6 +1631,7 @@ registerOpenApi(app, {
 
 /* ---------- Peak 接档器客户端 API（成员登录） ---------- */
 registerClientApi(app, {
+  listServers: () => loadServerItems(),
   listActivities: () => bizDb.listActivities(),
   getActivityById: (id) => bizDb.getActivityById(id),
   listProducts: () => bizDb.listProducts(),
@@ -2147,7 +2184,7 @@ function sendSpa(res) {
       "Vue 后台尚未构建：请确保项目根目录存在 dist/index.html"
     );
   }
-  return noStore(res).sendFile(adminWebIndex);
+  return pageHeaders(res).sendFile(adminWebIndex);
 }
 
 if (API_ONLY) {
@@ -2158,8 +2195,16 @@ if (API_ONLY) {
   app.get("/login.html", (_req, res) => redirectNoStore(res, "/login"));
   app.get("/app.html", (_req, res) => redirectNoStore(res, "/"));
 
-  // Vue 构建产物（优先于 public 静态）
-  app.use(express.static(adminWebDist, { index: false }));
+  // 带 hash 的脚本和样式可以长期缓存。index.html 仍由 pageHeaders 禁止缓存。
+  app.use(
+    "/assets",
+    express.static(path.join(adminWebDist, "assets"), {
+      immutable: true,
+      maxAge: "365d",
+      fallthrough: false,
+    })
+  );
+  app.use(express.static(adminWebDist, { index: false, maxAge: 0 }));
 }
 
 app.use(express.static(path.join(__dirname, "public")));

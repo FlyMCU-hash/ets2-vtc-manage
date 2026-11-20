@@ -74,8 +74,12 @@ pub fn open_path(path: &str) -> Result<(), String> {
     if target.is_empty() {
         return Err("路径为空".into());
     }
-    if !Path::new(target).exists() {
+    let path = Path::new(target);
+    if !path.exists() {
         return Err(format!("路径不存在：{target}"));
+    }
+    if !super::paths::may_open(path) {
+        return Err("只能打开欧卡目录或工具箱备份目录".into());
     }
     hidden("explorer")
         .arg(target)

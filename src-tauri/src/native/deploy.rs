@@ -1,10 +1,14 @@
-use super::paths::resolve_docs;
-use super::support::{ensure_dir, local_app_dir, move_tree, stamp_text};
+use super::paths::{resolve_docs, valid_install};
+use super::remote::ensure_download_url;
+use super::support::{ensure_dir, local_app_dir, move_tree, stamp_text, user_profile};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+
+const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 const DLC_OFF_DIR: &str = "DLC";
 const DLC_SUFFIX: &str = ".bak";
@@ -125,6 +129,24 @@ pub fn deploy(payload: &Value) -> Result<Value, String> {
     }
     let settings = payload.get("settings").cloned().unwrap_or(json!({}));
     let docs = resolve_docs(settings.get("ets2DocumentsPath").and_then(|v| v.as_str()).unwrap_or(""))?;
+    let disable = settings
+        .get("disableMapDlcOnDeploy")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let install = settings
+        .get("ets2InstallPath")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if disable && !install.is_empty() && !valid_install(Path::new(&install)) {
+        return Err("安装目录不是欧卡安装目录".into());
+    }
+    if !local_path.is_empty() {
+        accept_local_zip(Path::new(&local_path))?;
+    } else {
+        ensure_download_url(&download_url)?;
+    }
     let profiles_dir = docs.join("profiles");
     let had_profiles = profiles_dir.is_dir();
     let local_3c = read_local_3c(&docs, &profiles_dir);
@@ -178,18 +200,9 @@ pub fn deploy(payload: &Value) -> Result<Value, String> {
         notices.push(format!("本机 3C 写入活动档失败：{}。", failed.join("、")));
     }
     let mut held = Vec::new();
-    let disable = settings
-        .get("disableMapDlcOnDeploy")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
     if disable {
-        let install = settings
-            .get("ets2InstallPath")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
-        let root = Path::new(install);
-        if !root.is_dir() {
+        let root = Path::new(&install);
+        if !valid_install(root) {
             notices.push("未找到欧卡安装目录，地图、客运和挂车 DLC 未禁用。请先到平台设置填写安装路径。".to_string());
         } else {
             enable_all_disabled(root);
@@ -261,9 +274,45 @@ pub fn uninstall() -> Result<Value, String> {
     }))
 }
 
+fn accept_local_zip(path: &Path) -> Result<(), String> {
+    if !path.is_file() {
+        return Err("本地存档不存在".into());
+    }
+    let name = path.file_name().and_then(|value| value.to_str()).unwrap_or("");
+    if !name.to_ascii_lowercase().ends_with(".zip") {
+        return Err("本地存档必须是 zip 文件".into());
+    }
+    let len = fs::metadata(path).map_err(|e| format!("读取本地存档失败：{e}"))?.len();
+    if len > MAX_ARCHIVE_BYTES {
+        return Err("本地存档超过 2GB 限制".into());
+    }
+    let canon = fs::canonicalize(path).map_err(|e| format!("无法解析本地存档：{e}"))?;
+    let home = fs::canonicalize(user_profile()).unwrap_or_else(|_| user_profile());
+    let app = fs::canonicalize(local_app_dir()).unwrap_or_else(|_| local_app_dir());
+    let text = canon.to_string_lossy().to_ascii_lowercase();
+    let allowed = [home, app].into_iter().any(|root| {
+        let root = root.to_string_lossy().trim_end_matches(['\\', '/']).to_ascii_lowercase();
+        text == root || text.starts_with(&(root.clone() + "\\")) || text.starts_with(&(root + "/"))
+    });
+    if !allowed {
+        return Err("本地存档必须放在用户目录下".into());
+    }
+    Ok(())
+}
+
 fn download(url: &str, payload: &Value, dest: &Path) -> Result<(), String> {
+    ensure_download_url(url)?;
     let client = reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(8))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 8 {
+                return attempt.error(std::io::Error::new(std::io::ErrorKind::Other, "下载重定向过多"));
+            }
+            if super::remote::allow_download_url(attempt.url()) {
+                attempt.follow()
+            } else {
+                attempt.error(std::io::Error::new(std::io::ErrorKind::Other, "下载地址不在允许的主机"))
+            }
+        }))
         .build()
         .map_err(|e| format!("创建下载客户端失败：{e}"))?;
     let mut req = client.get(url);
@@ -276,8 +325,24 @@ fn download(url: &str, payload: &Value, dest: &Path) -> Result<(), String> {
     if !res.status().is_success() {
         return Err(format!("下载存档失败（HTTP {}）", res.status()));
     }
+    if res.content_length().is_some_and(|len| len > MAX_ARCHIVE_BYTES) {
+        return Err("存档超过 2GB 限制".into());
+    }
     let mut file = File::create(dest).map_err(|e| format!("创建临时文件失败：{e}"))?;
-    res.copy_to(&mut file).map_err(|e| format!("写入存档失败：{e}"))?;
+    let mut written = 0u64;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let size = res.read(&mut buf).map_err(|e| format!("下载存档失败：{e}"))?;
+        if size == 0 {
+            break;
+        }
+        written += size as u64;
+        if written > MAX_ARCHIVE_BYTES {
+            let _ = fs::remove_file(dest);
+            return Err("存档超过 2GB 限制".into());
+        }
+        file.write_all(&buf[..size]).map_err(|e| format!("写入存档失败：{e}"))?;
+    }
     Ok(())
 }
 
@@ -348,6 +413,9 @@ fn extract_profiles(zip_path: &Path, dest: &Path) -> Result<Vec<String>, String>
     for index in 0..archive.len() {
         let entry = archive.by_index(index).map_err(|e| e.to_string())?;
         let name = entry.name().replace('\\', "/");
+        if name.contains('\0') || name.split('/').any(|part| part == "..") {
+            return Err("压缩包包含非法路径".into());
+        }
         if name.ends_with("profile.sii") {
             let root = name
                 .rsplit_once('/')
@@ -362,12 +430,16 @@ fn extract_profiles(zip_path: &Path, dest: &Path) -> Result<Vec<String>, String>
         return Err("压缩包里没有 profile.sii，不能当作活动档案部署".into());
     }
     let mut names = Vec::new();
+    let mut inflated = 0u64;
     for root in roots {
         let leaf = root
             .rsplit('/')
             .find(|part| !part.is_empty())
             .unwrap_or("activity");
         let mut folder = safe_name(leaf);
+        if folder == "." || folder == ".." {
+            folder = "activity".into();
+        }
         let mut target = dest.join(&folder);
         let mut n = 2;
         while target.exists() {
@@ -379,8 +451,8 @@ fn extract_profiles(zip_path: &Path, dest: &Path) -> Result<Vec<String>, String>
         for index in 0..archive.len() {
             let mut entry = archive.by_index(index).map_err(|e| e.to_string())?;
             let name = entry.name().replace('\\', "/");
-            if name.contains("..") {
-                continue;
+            if name.contains('\0') || name.split('/').any(|part| part == "..") {
+                return Err("压缩包包含非法路径".into());
             }
             let relative = if root.is_empty() {
                 name.clone()
@@ -392,15 +464,28 @@ fn extract_profiles(zip_path: &Path, dest: &Path) -> Result<Vec<String>, String>
             if relative.is_empty() {
                 continue;
             }
-            let path = target.join(&relative);
+            let path = contained_join(&target, &relative)?;
             if name.ends_with('/') {
                 ensure_dir(&path)?;
+                ensure_inside(&target, &path)?;
             } else {
                 if let Some(parent) = path.parent() {
                     ensure_dir(parent)?;
+                    ensure_inside(&target, parent)?;
                 }
                 let mut out = File::create(&path).map_err(|e| format!("解压失败：{e}"))?;
-                std::io::copy(&mut entry, &mut out).map_err(|e| format!("解压失败：{e}"))?;
+                let mut buf = [0u8; 64 * 1024];
+                loop {
+                    let size = entry.read(&mut buf).map_err(|e| format!("解压失败：{e}"))?;
+                    if size == 0 {
+                        break;
+                    }
+                    inflated += size as u64;
+                    if inflated > MAX_ARCHIVE_BYTES {
+                        return Err("解压后的存档超过 2GB 限制".into());
+                    }
+                    out.write_all(&buf[..size]).map_err(|e| format!("解压失败：{e}"))?;
+                }
             }
         }
         names.push(folder);
@@ -559,6 +644,32 @@ fn disable_selected(install_root: &Path, scs_names: &[String]) -> Vec<HeldFile> 
         });
     }
     moved
+}
+
+fn contained_join(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    let mut out = root.to_path_buf();
+    for part in relative.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." || part.contains('\0') || part.contains(':') {
+            return Err("压缩包包含非法路径".into());
+        }
+        out.push(part);
+    }
+    Ok(out)
+}
+
+fn ensure_inside(root: &Path, path: &Path) -> Result<(), String> {
+    let root = fs::canonicalize(root).map_err(|e| format!("无法解析档案目录：{e}"))?;
+    let path = fs::canonicalize(path).map_err(|e| format!("无法解析解压路径：{e}"))?;
+    let root_text = root.to_string_lossy().trim_end_matches(['\\', '/']).to_ascii_lowercase();
+    let path_text = path.to_string_lossy().to_ascii_lowercase();
+    if path_text == root_text || path_text.starts_with(&(root_text.clone() + "\\")) || path_text.starts_with(&(root_text + "/")) {
+        Ok(())
+    } else {
+        Err("压缩包路径超出档案目录".into())
+    }
 }
 
 fn safe_name(name: &str) -> String {

@@ -1,6 +1,6 @@
 use super::support::{hidden, user_profile};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize)]
@@ -13,9 +13,44 @@ struct DetectedPaths {
     docs_exists: bool,
 }
 
-fn valid_install(dir: &Path) -> bool {
+pub(crate) fn valid_install(dir: &Path) -> bool {
     dir.join("bin\\win_x64\\eurotrucks2.exe").is_file()
         || dir.join("eurotrucks2.exe").is_file()
+}
+
+pub(crate) fn is_ets2_documents(dir: &Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    let Some(name) = dir.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    if !name.eq_ignore_ascii_case("Euro Truck Simulator 2") {
+        return false;
+    }
+    dir.join("config.cfg").is_file() || dir.join("profiles").is_dir()
+}
+
+pub(crate) fn may_open(path: &Path) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    let Ok(canon) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    if inside(&canon, &super::support::toolbox_root()) || inside(&canon, &super::support::local_app_dir()) {
+        return true;
+    }
+    canon.ancestors().any(|dir| is_ets2_documents(dir) || valid_install(dir))
+}
+
+fn inside(path: &Path, root: &Path) -> bool {
+    let Ok(root) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    let path_text = path.to_string_lossy().to_ascii_lowercase();
+    let root_text = root.to_string_lossy().trim_end_matches(['\\', '/']).to_ascii_lowercase();
+    path_text == root_text || path_text.starts_with(&(root_text.clone() + "\\")) || path_text.starts_with(&(root_text + "/"))
 }
 
 fn reg_value(key: &str, name: &str) -> String {
@@ -113,15 +148,11 @@ fn documents_candidates() -> Vec<PathBuf> {
 
 fn guess_documents() -> String {
     for path in documents_candidates() {
-        if path.is_dir() {
+        if is_ets2_documents(&path) {
             return path.display().to_string();
         }
     }
-    documents_candidates()
-        .into_iter()
-        .next()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default()
+    String::new()
 }
 
 pub fn detect(payload: &Value) -> Result<Value, String> {
@@ -141,7 +172,7 @@ pub fn detect(payload: &Value) -> Result<Value, String> {
     } else {
         guess_install()
     };
-    let docs = if !given_docs.is_empty() && Path::new(given_docs).is_dir() {
+    let docs = if is_ets2_documents(Path::new(given_docs)) {
         given_docs.to_string()
     } else {
         guess_documents()
@@ -159,17 +190,18 @@ pub fn detect(payload: &Value) -> Result<Value, String> {
 
 pub fn resolve_docs(raw: &str) -> Result<PathBuf, String> {
     let trimmed = raw.trim();
-    if !trimmed.is_empty() && Path::new(trimmed).is_dir() {
-        return Ok(PathBuf::from(trimmed));
+    if !trimmed.is_empty() {
+        let given = PathBuf::from(trimmed);
+        if is_ets2_documents(&given) {
+            return std::fs::canonicalize(&given).map_err(|e| format!("无法解析文档目录：{e}"));
+        }
+        if given.exists() {
+            return Err("文档目录不是欧卡文档目录".into());
+        }
     }
-    let value = detect(&json!({ "ets2DocumentsPath": trimmed, "ets2InstallPath": "" }))?;
-    let docs = value
-        .get("ets2DocumentsPath")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    if docs.is_empty() || !Path::new(&docs).is_dir() {
+    let docs = guess_documents();
+    if docs.is_empty() {
         return Err("未找到欧卡文档目录，请先到「平台设置」填写".into());
     }
-    Ok(PathBuf::from(docs))
+    std::fs::canonicalize(&docs).map_err(|e| format!("无法解析文档目录：{e}"))
 }

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { defineAsyncComponent, onMounted, ref } from 'vue'
 import { fallbackDisableDlcs, loadDisableDlcs, type DisableDlc } from '@/kernel/dlc'
-import { publicGet, request } from '@/kernel/http'
+import { request } from '@/kernel/http'
+import { collectServerPayloads } from '@/kernel/servers'
 import { fail, ok } from '@/kernel/toast'
-import { OFFICIAL_SERVERS, itemsOf, statusLabel, textOf } from '@/kernel/types'
+import { itemsOf, statusLabel, textOf } from '@/kernel/types'
 
 const MapPolygon = defineAsyncComponent(() => import('./MapPolygon.vue'))
 
@@ -71,8 +72,10 @@ onMounted(() => {
 })
 
 function ensureEditorData() {
-  serversTask ??= loadServerOptions().catch(() => {
+  serversTask ??= loadServerOptions().catch((error) => {
+    servers.value = []
     serversTask = null
+    fail(error)
   })
   mapTask ??= loadMapConfig().catch(() => {
     mapTask = null
@@ -91,27 +94,33 @@ function fromPicker(value: string) {
   return text.length > 16 ? text.slice(0, 16) : text
 }
 
+function serverOptionsOf(payload: unknown) {
+  const bag = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>
+  const nested = bag.data && typeof bag.data === 'object' && !Array.isArray(bag.data) ? (bag.data as Record<string, unknown>) : null
+  const list = Array.isArray(payload)
+    ? payload
+    : bag.response || bag.items || (Array.isArray(bag.data) ? bag.data : null) || nested?.list || nested?.items || nested?.servers || []
+  const rows = (Array.isArray(list) ? list : []).flatMap((raw) => {
+    const row = raw as Record<string, unknown>
+    const name = textOf(row, 'name', 'serverName', 'shortName', 'shortname')
+    if (!name) return []
+    return [{ name, game: textOf(row, 'game') }]
+  })
+  const counts = new Map<string, number>()
+  for (const row of rows) counts.set(row.name, (counts.get(row.name) || 0) + 1)
+  return rows.map((row) => {
+    const label = row.game ? `${row.game} · ${row.name}` : row.name
+    const duplicated = (counts.get(row.name) || 0) > 1
+    return { name: duplicated ? label : row.name, label }
+  })
+}
+
 async function loadServerOptions() {
-  try {
-    const payload = await publicGet(OFFICIAL_SERVERS)
-    const bag = payload as Record<string, unknown>
-    const list = Array.isArray(payload) ? payload : bag.response || bag.data || bag.items || []
-    const rows = (Array.isArray(list) ? list : []).flatMap((raw) => {
-      const row = raw as Record<string, unknown>
-      const name = textOf(row, 'name', 'serverName')
-      if (!name) return []
-      return [{ name, game: textOf(row, 'game') }]
-    })
-    const counts = new Map<string, number>()
-    for (const row of rows) counts.set(row.name, (counts.get(row.name) || 0) + 1)
-    servers.value = rows.map((row) => {
-      const label = row.game ? `${row.game} · ${row.name}` : row.name
-      const duplicated = (counts.get(row.name) || 0) > 1
-      return { name: duplicated ? label : row.name, label }
-    })
-  } catch {
-    servers.value = []
-  }
+  await collectServerPayloads((payload) => {
+    const rows = serverOptionsOf(payload)
+    if (rows.length > servers.value.length) servers.value = rows
+  })
+  if (!servers.value.length) throw new Error('读取不到服务器列表')
 }
 
 function dlcIdList(raw: unknown) {

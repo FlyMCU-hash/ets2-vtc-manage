@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "build:web": "vue-tsc --noEmit && vite build --outDir server/dist --emptyOutDir",
+    "build:web": "vue-tsc --noEmit && node scripts/build-web.mjs",
     "tauri": "tauri",
     "pack": "node scripts/pack.mjs"
   },

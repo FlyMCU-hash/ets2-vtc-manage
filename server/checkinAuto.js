@@ -90,21 +90,10 @@ function parseActivityTime(text, asEnd = false) {
   return Number.isFinite(t) ? t : NaN;
 }
 
+/** 打卡钟点固定按北京时间，不跟服务器所在时区。 */
 function chinaMinutes(now = new Date()) {
-  try {
-    const parts = new Intl.DateTimeFormat("en-GB", {
-      timeZone: "Asia/Shanghai",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(now);
-    const h = Number(parts.find((p) => p.type === "hour")?.value);
-    const m = Number(parts.find((p) => p.type === "minute")?.value);
-    if (Number.isFinite(h) && Number.isFinite(m)) return h * 60 + m;
-  } catch {
-    /* 回退进程本地时间 */
-  }
-  return now.getHours() * 60 + now.getMinutes();
+  const shifted = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  return shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
 }
 
 function isConfigActiveNow(activity, config, now = new Date()) {
@@ -117,6 +106,7 @@ function isConfigActiveNow(activity, config, now = new Date()) {
   if (!Number.isFinite(start) || ts < start) return false;
   if (Number.isFinite(end) && ts >= end) return false;
 
+  if (config.type === "all") return true;
   const cur = chinaMinutes(now);
   if (config.type === "range") {
     const s = timeToMinutes(config.startTime);
@@ -326,42 +316,61 @@ async function fetchFullmapPlayers() {
   throw err;
 }
 
+function mapCatalogRow(raw, idKey) {
+  const id = Number(raw[idKey] ?? raw.serverId ?? raw.id);
+  const name = String(raw.serverName || raw.name || "").trim();
+  if (!Number.isFinite(id) || !name) return null;
+  return {
+    id,
+    name,
+    shortname: String(raw.shortName || raw.shortname || ""),
+  };
+}
+
+async function fetchEvmServerCatalog() {
+  const { payload } = await evmApi.fetchJson("/server/list", null, 10000);
+  const list = Array.isArray(payload.data) ? payload.data : [];
+  return list.map((s) => mapCatalogRow(s, "serverId")).filter(Boolean);
+}
+
+async function fetchTruckersMpCatalog() {
+  const upstream = await evmApi.httpFetch("https://api.truckersmp.com/v2/servers", {
+    signal: evmApi.makeSignal(10000),
+  });
+  const payload = await upstream.json();
+  const apiError = payload.error;
+  const failed =
+    apiError === true ||
+    apiError === "true" ||
+    (typeof apiError === "string" &&
+      apiError.toLowerCase() !== "false" &&
+      apiError.trim() !== "");
+  const list = Array.isArray(payload.response) ? payload.response : [];
+  if (failed && !list.length) return [];
+  return list.map((s) => mapCatalogRow(s, "id")).filter(Boolean);
+}
+
+let serverCatalogCache = { at: 0, items: [] };
+
+/** 地图服和 TruckersMP 的服务器编号不一样，两套都保留，避免 Arcade 7/8 对不上。 */
 async function fetchTmpServers() {
-  try {
-    const { payload } = await evmApi.fetchJson("/server/list", null, 10000);
-    const list = Array.isArray(payload.data) ? payload.data : [];
-    if (list.length) {
-      return list.map((s) => ({
-        id: Number(s.serverId ?? s.id),
-        name: String(s.serverName || s.name || ""),
-        shortname: String(s.shortName || s.shortname || ""),
-      }));
-    }
-  } catch (err) {
-    console.warn("EVM 服务器列表失败，回退 TruckersMP:", err.message);
+  const now = Date.now();
+  if (serverCatalogCache.items.length && now - serverCatalogCache.at < 60 * 1000) {
+    return serverCatalogCache.items;
   }
-  try {
-    const upstream = await evmApi.httpFetch("https://api.truckersmp.com/v2/servers", {
-      signal: evmApi.makeSignal(10000),
-    });
-    const payload = await upstream.json();
-    const apiError = payload.error;
-    const failed =
-      apiError === true ||
-      apiError === "true" ||
-      (typeof apiError === "string" &&
-        apiError.toLowerCase() !== "false" &&
-        apiError.trim() !== "");
-    const list = Array.isArray(payload.response) ? payload.response : [];
-    if (failed && !list.length) return [];
-    return list.map((s) => ({
-      id: Number(s.id),
-      name: String(s.name || ""),
-      shortname: String(s.shortname || ""),
-    }));
-  } catch {
-    return [];
-  }
+  const [evm, tmp] = await Promise.all([
+    fetchEvmServerCatalog().catch((err) => {
+      console.warn("EVM 服务器列表失败:", err.message);
+      return [];
+    }),
+    fetchTruckersMpCatalog().catch((err) => {
+      console.warn("TruckersMP 服务器列表失败:", err.message);
+      return [];
+    }),
+  ]);
+  const items = evm.concat(tmp);
+  if (items.length) serverCatalogCache = { at: now, items };
+  return items;
 }
 
 /**

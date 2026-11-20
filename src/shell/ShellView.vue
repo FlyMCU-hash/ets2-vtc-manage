@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { request } from '@/kernel/http'
 import { groupOrder, modules } from '@/kernel/modules'
 import { canAccess, isManager } from '@/kernel/perms'
@@ -10,9 +10,9 @@ import { isDesktop } from '@/kernel/native'
 import { checkAppUpdate } from '@/kernel/update'
 import logoUrl from '../../logo.ico'
 import Icon from './Icon.vue'
+import ModuleHost from './ModuleHost.vue'
 
 const session = useSession()
-const pageCache = ref<Record<string, ReturnType<typeof defineAsyncComponent>>>({})
 
 const visible = computed(() =>
   modules.filter((mod) => {
@@ -24,11 +24,6 @@ const visible = computed(() =>
 )
 
 const overlays = computed(() => modules.filter((mod) => mod.overlay && isDesktop()))
-
-function overlayView(mod: (typeof modules)[number]) {
-  pageCache.value[mod.id] ||= defineAsyncComponent(mod.load as never)
-  return pageCache.value[mod.id]
-}
 
 const groups = computed(() =>
   groupOrder
@@ -102,11 +97,53 @@ async function checkUpdate() {
 }
 
 const current = computed(() => visible.value.find((mod) => mod.id === session.tab) || visible.value[0])
-const view = computed(() => {
-  const mod = current.value
-  if (!mod) return null
-  pageCache.value[mod.id] ||= defineAsyncComponent(mod.load as never)
-  return pageCache.value[mod.id]
+
+const navRef = ref<HTMLElement | null>(null)
+let navRaf = 0
+
+function applyNavMagnet(clientY: number) {
+  const nav = navRef.value
+  if (!nav) return
+  const navRect = nav.getBoundingClientRect()
+  nav.style.setProperty('--sweep-y', `${clientY - navRect.top}px`)
+  const buttons = nav.querySelectorAll<HTMLElement>('.nav button')
+  const range = 130
+  const maxScale = 1.1
+  buttons.forEach((btn) => {
+    const rect = btn.getBoundingClientRect()
+    const center = rect.top + rect.height / 2
+    const dist = Math.abs(center - clientY)
+    const t = dist < range ? 1 - dist / range : 0
+    btn.style.setProperty('--nav-scale', (1 + (maxScale - 1) * t).toFixed(3))
+    btn.style.setProperty('--nav-glow', t.toFixed(3))
+  })
+}
+
+function onNavMove(e: MouseEvent) {
+  cancelAnimationFrame(navRaf)
+  navRaf = requestAnimationFrame(() => applyNavMagnet(e.clientY))
+}
+
+function resetNavMagnet() {
+  cancelAnimationFrame(navRaf)
+  const nav = navRef.value
+  if (!nav) return
+  nav.style.setProperty('--sweep-y', '-9999px')
+  nav.querySelectorAll<HTMLElement>('.nav button').forEach((btn) => {
+    btn.style.setProperty('--nav-scale', '1')
+    btn.style.setProperty('--nav-glow', '0')
+  })
+}
+
+onMounted(() => {
+  const nav = navRef.value
+  nav?.addEventListener('mousemove', onNavMove)
+  nav?.addEventListener('mouseleave', resetNavMagnet)
+})
+onUnmounted(() => {
+  const nav = navRef.value
+  nav?.removeEventListener('mousemove', onNavMove)
+  nav?.removeEventListener('mouseleave', resetNavMagnet)
 })
 </script>
 
@@ -117,7 +154,8 @@ const view = computed(() => {
         <img class="brand-logo" :src="logoUrl" alt="" />
         <strong v-if="!session.collapsed">Peak 车队中心</strong>
       </div>
-      <nav class="nav">
+      <nav class="nav" ref="navRef">
+        <div class="nav-sweep" aria-hidden="true"></div>
         <section v-for="group in groups" :key="group.label || 'root'">
           <div v-if="group.label && !session.collapsed" class="group-label">{{ group.label }}</div>
           <button
@@ -150,17 +188,28 @@ const view = computed(() => {
         <button class="btn-ghost" @click="session.toggleNav()">{{ session.collapsed ? '展开' : '收起' }}</button>
         <div class="row">
           <button v-if="isDesktop()" class="btn-ghost" :disabled="checkingUpdate" @click="checkUpdate">{{ updateLabel }}</button>
-          <button class="btn-ghost" @click="session.setTheme(session.settings.theme === 'dark' ? 'light' : 'dark')">
-            {{ session.settings.theme === 'dark' ? '白天' : '黑夜' }}
+          <button class="theme-toggle" role="switch"
+            :aria-checked="session.settings.theme === 'dark'"
+            :aria-label="session.settings.theme === 'dark' ? '切换到白天' : '切换到黑夜'"
+            :title="session.settings.theme === 'dark' ? '黑夜模式' : '白天模式'"
+            @click="session.setTheme(session.settings.theme === 'dark' ? 'light' : 'dark')">
+            <span class="track">
+              <span class="track-sun">☀️</span>
+              <span class="track-moon">🌙</span>
+              <span class="knob">
+                <span class="knob-sun">☀️</span>
+                <span class="knob-moon">🌙</span>
+              </span>
+            </span>
           </button>
         </div>
       </header>
       <div class="content">
         <KeepAlive :max="12">
-          <component :is="view" v-if="view" :key="session.tab" />
+          <ModuleHost v-if="current" :key="current.id" :module-id="current.id" :loader="current.load" />
         </KeepAlive>
       </div>
     </section>
-    <component v-for="mod in overlays" :key="mod.id" :is="overlayView(mod)" />
+    <ModuleHost v-for="mod in overlays" :key="mod.id" :module-id="mod.id" :loader="mod.load" />
   </div>
 </template>

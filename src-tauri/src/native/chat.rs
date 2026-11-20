@@ -13,10 +13,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
-static INTERVAL: AtomicU32 = AtomicU32::new(30);
+static INTERVAL: AtomicU32 = AtomicU32::new(60);
 static HOTKEYS: AtomicBool = AtomicBool::new(false);
 static TEXT: Mutex<String> = Mutex::new(String::new());
 static START: Once = Once::new();
+
+const VK_Y: u32 = 0x59;
+const SCAN_Y: u32 = 0x15;
+const SCAN_ENTER: u32 = 0x1C;
 
 pub fn install() {
     START.call_once(|| {
@@ -31,7 +35,7 @@ pub fn status() -> Result<Value, String> {
         "ok": true,
         "running": RUNNING.load(Ordering::SeqCst),
         "gameRunning": game_running(),
-        "intervalSecs": INTERVAL.load(Ordering::SeqCst).max(5),
+        "intervalSecs": INTERVAL.load(Ordering::SeqCst).max(60),
         "text": TEXT.lock().map(|v| v.clone()).unwrap_or_default(),
         "hotkeys": HOTKEYS.load(Ordering::SeqCst),
     }))
@@ -70,7 +74,7 @@ fn store(payload: &Value) -> Result<(), String> {
         .get("intervalSecs")
         .and_then(|v| v.as_u64())
         .unwrap_or(INTERVAL.load(Ordering::SeqCst) as u64)
-        .max(5) as u32;
+        .max(60) as u32;
     INTERVAL.store(secs, Ordering::SeqCst);
     Ok(())
 }
@@ -105,7 +109,7 @@ fn send_loop() {
     loop {
         if RUNNING.load(Ordering::SeqCst) {
             let text = TEXT.lock().map(|v| v.clone()).unwrap_or_default();
-            let secs = INTERVAL.load(Ordering::SeqCst).max(5);
+            let secs = INTERVAL.load(Ordering::SeqCst).max(60);
             if game_running() && !text.trim().is_empty() {
                 let _ = send_chat(&text);
             } else if !game_running() {
@@ -123,33 +127,43 @@ fn send_loop() {
     }
 }
 
-fn send_chat(text: &str) -> Result<(), String> {
-    let hwnd = find_game_window().ok_or("找不到游戏窗口")?;
-    press_enter(hwnd)?;
-    thread::sleep(Duration::from_millis(80));
-    for ch in text.chars() {
-        unsafe {
-            let _ = PostMessageW(hwnd, WM_CHAR, WPARAM(ch as u32 as usize), LPARAM(0));
-        }
-        thread::sleep(Duration::from_millis(12));
+fn post_key(hwnd: HWND, vk: u32, scan: u32, down: bool) {
+    let l_param = if down {
+        (scan << 16) | 1
+    } else {
+        (scan << 16) | 0xC0000001
+    };
+    unsafe {
+        let _ = PostMessageW(
+            hwnd,
+            if down { WM_KEYDOWN } else { WM_KEYUP },
+            WPARAM(vk as usize),
+            LPARAM(l_param as isize),
+        );
     }
-    thread::sleep(Duration::from_millis(40));
-    press_enter(hwnd)?;
-    Ok(())
 }
 
-fn press_enter(hwnd: HWND) -> Result<(), String> {
-    unsafe {
-        PostMessageW(hwnd, WM_KEYDOWN, WPARAM(VK_RETURN.0 as usize), LPARAM(0))
-            .map_err(|e| e.to_string())?;
-        PostMessageW(
-            hwnd,
-            WM_KEYUP,
-            WPARAM(VK_RETURN.0 as usize),
-            LPARAM(0xC0000001u32 as isize),
-        )
-        .map_err(|e| e.to_string())?;
+fn press_key(hwnd: HWND, vk: u32, scan: u32) {
+    post_key(hwnd, vk, scan, true);
+    thread::sleep(Duration::from_millis(50));
+    post_key(hwnd, vk, scan, false);
+}
+
+fn send_chat(text: &str) -> Result<(), String> {
+    let hwnd = find_game_window().ok_or("找不到游戏窗口")?;
+    // 按 Y 打开聊天框，等窗口响应
+    press_key(hwnd, VK_Y, SCAN_Y);
+    thread::sleep(Duration::from_millis(500));
+    // 逐字送入文字（UTF-16 code unit，与 TMP_Auto_typing 一致）
+    for unit in text.encode_utf16() {
+        unsafe {
+            let _ = PostMessageW(hwnd, WM_CHAR, WPARAM(unit as usize), LPARAM(0));
+        }
+        thread::sleep(Duration::from_millis(30));
     }
+    thread::sleep(Duration::from_millis(300));
+    // 回车发送
+    press_key(hwnd, VK_RETURN.0 as u32, SCAN_ENTER);
     Ok(())
 }
 

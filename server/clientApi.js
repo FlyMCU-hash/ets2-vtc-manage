@@ -323,6 +323,16 @@ function registerClientApi(app, deps = {}) {
     return day >= startDay && day <= endDay;
   }
 
+  app.get("/api/client/servers", requireClientAuth, async (req, res) => {
+    try {
+      const result = await deps.listServers();
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      console.error("client servers:", err.message);
+      res.status(502).json({ ok: false, message: "获取服务器列表失败" });
+    }
+  });
+
   /**
    * GET /api/client/activities
    * ?status=all|ongoing|upcoming|done

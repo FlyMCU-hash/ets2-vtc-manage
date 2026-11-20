@@ -18,7 +18,7 @@ const full = ref<Record<string, unknown>>({})
 const fullProfile = ref('')
 const chat = ref<Record<string, unknown>>({})
 const chatText = ref('')
-const chatInterval = ref(30)
+const chatInterval = ref(60)
 const tag = ref<Record<string, unknown>>({})
 const tagName = ref('Peak车队')
 const fileSummary = computed(() => {
@@ -120,7 +120,7 @@ async function refreshChat() {
 }
 async function saveChat() {
   try {
-    const result = await native<Record<string, string>>('auto_chat_configure', { text: chatText.value, intervalSecs: Math.max(5, Number(chatInterval.value) || 5) })
+    const result = await native<Record<string, string>>('auto_chat_configure', { text: chatText.value, intervalSecs: Math.max(60, Number(chatInterval.value) || 60) })
     ok(result.message)
     await refreshChat()
   } catch (error) {
@@ -129,7 +129,7 @@ async function saveChat() {
 }
 async function startChat() {
   try {
-    const result = await native<Record<string, string>>('auto_chat_start', { text: chatText.value, intervalSecs: Math.max(5, Number(chatInterval.value) || 5) })
+    const result = await native<Record<string, string>>('auto_chat_start', { text: chatText.value, intervalSecs: Math.max(60, Number(chatInterval.value) || 60) })
     ok(result.message)
     await refreshChat()
   } catch (error) {
@@ -230,10 +230,10 @@ async function openBackup(method: string) {
 
     <section class="card">
       <h2>挂机自动发言</h2>
-      <p class="muted">游戏需已启动。间隔最低 5 秒。快捷键 F10 启动，F11 停止。{{ chat.hotkeys ? '' : '若快捷键无效，说明已被其他程序占用。' }}</p>
+      <p class="muted">游戏需已启动。间隔最低 60 秒。快捷键 F10 启动，F11 停止。{{ chat.hotkeys ? '' : '若快捷键无效，说明已被其他程序占用。' }}</p>
       <p>状态：{{ chat.running ? '运行中' : '未启动' }} · 游戏 {{ chat.gameRunning ? '已检测到' : '未检测到' }}</p>
       <label class="field"><span>发言</span><textarea v-model="chatText"></textarea></label>
-      <label class="field"><span>间隔（秒）</span><input v-model.number="chatInterval" type="number" min="5" /></label>
+      <label class="field"><span>间隔（秒）</span><input v-model.number="chatInterval" type="number" min="60" /></label>
       <div class="row actions">
         <button class="btn" :disabled="!chat.gameRunning" @click="startChat">启动</button>
         <button class="btn-ghost" @click="stopChat">停止</button>

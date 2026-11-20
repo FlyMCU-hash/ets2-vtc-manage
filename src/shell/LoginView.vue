@@ -99,6 +99,9 @@ function wait(ms: number) {
 
 <template>
   <div class="login">
+    <div class="blob blob-1" aria-hidden="true"></div>
+    <div class="blob blob-2" aria-hidden="true"></div>
+    <div class="blob blob-3" aria-hidden="true"></div>
     <form class="login-card" :class="{ leaving: done }" @submit.prevent="submit">
       <img class="login-logo" :src="logoUrl" alt="" />
       <h1>Peak 车队中心</h1>

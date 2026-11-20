@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { publicGet } from '@/kernel/http'
-import { OFFICIAL_SERVERS, textOf } from '@/kernel/types'
+import { collectServerPayloads } from '@/kernel/servers'
+import { textOf } from '@/kernel/types'
 
 type Feature = { label: string; on: boolean }
 type Server = {
@@ -39,9 +39,13 @@ function flag(row: Record<string, unknown>, keys: string[]) {
 async function load() {
   error.value = ''
   try {
-    items.value = normalize(await publicGet(OFFICIAL_SERVERS))
+    await collectServerPayloads((payload) => {
+      const rows = normalize(payload)
+      if (rows.length > items.value.length) items.value = rows
+    })
+    if (!items.value.length) error.value = '读取不到服务器列表'
   } catch (err) {
-    error.value = `${err}`
+    error.value = err instanceof Error ? err.message : `${err}`
   }
 }
 
